@@ -1,0 +1,161 @@
+---
+title: "NOAA Storm Data Analysis (2025)"
+author: "Kaden Dixon"
+date: "2026-04-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(tidyr)
+library(lubridate)
+library(knitr)
+```
+
+## Synopsis
+
+This project looks at NOAA storm data from 2025 to find out which weather events are the most dangerous, where they happen most, and when they happen. Flash floods caused the most deaths and injuries with 1,132 total. Thunderstorm winds happened the most often with 22,246 events. Thunderstorm winds peak in June. Flash floods caused the most property damage at $4.6 billion. This information can help cities know what weather events to prepare for.
+
+## Data Processing
+
+I used three NOAA data files to get details, fatalities, and locations. I merged them together using the EVENT ID number. I added up deaths and injuries to get total health impact. I also converted damage amounts like "200.00M" into applicable numbers.
+
+```{r}
+folder_path <- "C:/Users/25kdi/Downloads/NOAA_Data"
+
+details <- read_csv(file.path(folder_path, "StormEvents_details-ftp_v1.0_d2025_c20260323.csv"))
+fatalities <- read_csv(file.path(folder_path, "StormEvents_fatalities-ftp_v1.0_d2025_c20260323.csv"))
+locations <- read_csv(file.path(folder_path, "StormEvents_locations-ftp_v1.0_d2025_c20260323.csv"))
+
+fatality_counts <- fatalities %>%
+  group_by(EVENT_ID) %>%
+  summarise(FATALITY_COUNT = n())
+
+merged_data <- details %>%
+  left_join(locations, by = "EVENT_ID") %>%
+  left_join(fatality_counts, by = "EVENT_ID")
+
+merged_data$FATALITY_COUNT[is.na(merged_data$FATALITY_COUNT)] <- 0
+
+merged_data$TOTAL_HEALTH_IMPACT <- merged_data$DEATHS_DIRECT + merged_data$INJURIES_DIRECT
+
+merged_data$BEGIN_DATE <- as.Date(merged_data$BEGIN_DATE_TIME, "%d-%b-%y %H:%M:%S")
+merged_data$MONTH <- month(merged_data$BEGIN_DATE)
+
+convert_damage <- function(x) {
+  num <- as.numeric(gsub("[^0-9.]", "", x))
+  num[is.na(num)] <- 0
+
+  multiplier <- ifelse(grepl("K", x), 1000,
+                       ifelse(grepl("M", x), 1000000,
+                              ifelse(grepl("B", x), 1000000000, 1)))
+
+  num * multiplier
+}
+
+merged_data$DAMAGE_PROPERTY_NUM <- convert_damage(merged_data$DAMAGE_PROPERTY)
+merged_data$DAMAGE_CROPS_NUM <- convert_damage(merged_data$DAMAGE_CROPS)
+```
+
+## Results
+
+### Question 1: Which events are most harmful to the population?
+
+```{r}
+health_impact <- merged_data %>%
+  group_by(EVENT_TYPE) %>%
+  summarise(
+    deaths = sum(DEATHS_DIRECT, na.rm = TRUE),
+    injuries = sum(INJURIES_DIRECT, na.rm = TRUE),
+    total = sum(TOTAL_HEALTH_IMPACT, na.rm = TRUE)
+  )
+
+health_impact <- health_impact[order(-health_impact$total), ][1:10, ]
+
+print(health_impact)
+
+library(ggplot2)
+
+ggplot(health_impact, aes(x = reorder(EVENT_TYPE, total), y = total)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Weather Events by Health Impact",
+    x = "Event Type",
+    y = "Total Number of Deaths and Injuries",
+    caption = "Values are the combined total of direct deaths and direct injuries caused by each weather event type."
+  )
+```
+
+Flash floods were the most harmful weather event in 2025 with 1,132 total deaths and injuries. Tornadoes were the second most harmful event with 423 total deaths and injuries followed by excessive heat. Overall, flash floods caused the most damage to people than any other weather event in the data.
+
+### Question 2: Which events happen most often?
+
+```{r}
+event_frequency <- merged_data %>%
+  group_by(EVENT_TYPE) %>%
+  summarise(count = n())
+
+event_frequency <- event_frequency[order(-event_frequency$count), ][1:10, ]
+
+print(event_frequency)
+```
+
+The most common weather event in 2025 was Thunderstorm Wind with 22,246 occurrences. Flash floods were the second most common event with 19,304 occurrences, followed by hail with 9,319. This shows that wind and flood-related events happen much more frequently than the other types of weather events in the data.
+
+### Question 3: When do the most common events happen?
+
+```{r}
+top_events <- event_frequency$EVENT_TYPE[1:5]
+
+monthly_patterns <- merged_data[merged_data$EVENT_TYPE %in% top_events, ]
+
+monthly_patterns <- monthly_patterns %>%
+  group_by(EVENT_TYPE, MONTH) %>%
+  summarise(count = n())
+
+print(monthly_patterns)
+```
+
+Flash floods occur throughout the year but peak in the summer, especially in July (5,888 events) and June (3,669 events). Other events like thunderstorm, wind, and hail also show higher activity during warmer months. This shows that many of the most common weather events are strongly affected by the season.
+
+### Question 4: Which events cause the most damage?
+
+```{r}
+damage_by_event <- merged_data %>%
+  group_by(EVENT_TYPE) %>%
+  summarise(
+    property = sum(DAMAGE_PROPERTY_NUM, na.rm = TRUE) / 1e6,
+    crops = sum(DAMAGE_CROPS_NUM, na.rm = TRUE) / 1e6
+  )
+
+damage_by_event$total <- damage_by_event$property + damage_by_event$crops
+damage_by_event <- damage_by_event[order(-damage_by_event$total), ][1:10, ]
+
+print(damage_by_event)
+```
+
+Flash floods caused the most economic damage in 2025 with a total of about $4.6 billion (mostly from property damage). Tornadoes were the second most damaging event at about $3.6 billion, followed by wildfires at about 982 million. This shows that flash floods and tornadoes are the most economically damaging weather events in the data.
+
+### Extra Question: Which states have the most total damage?
+```{r}
+damage_by_state <- merged_data %>%
+  group_by(STATE) %>%
+  summarise(total_damage = sum(DAMAGE_PROPERTY_NUM + DAMAGE_CROPS_NUM, na.rm = TRUE) / 1e6)
+
+damage_by_state <- damage_by_state[order(-damage_by_state$total_damage), ][1:10, ]
+
+print(damage_by_state)
+```
+
+Missouri had the highest total storm damage at about $3.39 billion, followed by Texas with $1.82 billion and Illinois with $1.34 billion. This shows that storm damage is not even across the US, and some states are affected much more than others.
+
+## Summary
+
+Most harmful event: Flash Flood
+Most frequent event: Thunderstorm Wind
+Most damaging event: Flash Flood
